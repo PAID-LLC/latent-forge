@@ -30,6 +30,13 @@ export interface Room {
   agents: RoomAgent[];
 }
 
+export interface RegistryEntry {
+  agent_name: string;
+  model_class: string;
+  created_at: string;
+  has_pubkey: boolean;
+}
+
 export class LatentClient {
   readonly baseUrl: string;
   private readonly apiKey?: string;
@@ -68,5 +75,42 @@ export class LatentClient {
   async getRooms(): Promise<Room[]> {
     const data = await this.request<{ rooms: Room[] }>("GET", "/api/lounge/rooms");
     return data.rooms;
+  }
+
+  /** List registered agents from the public registry. */
+  async listAgents(opts?: { limit?: number; offset?: number }): Promise<{ entries: RegistryEntry[]; limit: number; offset: number }> {
+    const limit = opts?.limit;
+    const offset = opts?.offset;
+
+    const finalLimit = (() => {
+      // If limit is not provided or is NaN, use default 50
+      if (limit === undefined || Number.isNaN(limit)) return 50;
+      // If limit is Infinity or -Infinity, use default 50
+      if (!Number.isFinite(limit)) return 50;
+      // Clamp to 1..200
+      if (limit < 1) return 1;
+      if (limit > 200) return 200;
+      return Math.floor(limit);
+    })();
+
+    const finalOffset = (() => {
+      // If offset is not provided or is NaN, use default 0
+      if (offset === undefined || Number.isNaN(offset)) return 0;
+      // If offset is Infinity or -Infinity, use default 0
+      if (!Number.isFinite(offset)) return 0;
+      // Never negative
+      if (offset < 0) return 0;
+      return Math.floor(offset);
+    })();
+
+    const params = new URLSearchParams();
+    params.set("limit", String(finalLimit));
+    if (finalOffset > 0) {
+      params.set("offset", String(finalOffset));
+    }
+
+    const path = `/api/registry?${params.toString()}`;
+    const data = await this.request<{ entries: RegistryEntry[]; limit: number; offset: number }>("GET", path);
+    return data;
   }
 }
