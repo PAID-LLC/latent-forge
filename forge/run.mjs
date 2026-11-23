@@ -224,10 +224,23 @@ async function main() {
     `<sub>Draft until a person marks it ready. Model cost so far: $${cost().toFixed(4)}.</sub>`,
   ].join("\n");
 
+  // The PAID-LLC org does not let Actions open (or approve) pull requests, on
+  // purpose: that same switch would let any workflow approve PRs in every org
+  // repo. So when GitHub refuses, the build lands on the spec issue instead,
+  // with a one-click link for a maintainer to open the PR.
   const existing = await gh("GET", `/repos/${repo}/pulls?head=${repo.split("/")[0]}:${branch}&state=open`);
-  const pr = existing[0]
-    ? await gh("PATCH", `/repos/${repo}/pulls/${existing[0].number}`, { body })
-    : await gh("POST", `/repos/${repo}/pulls`, { title: `Forge: ${issue.title}`, head: branch, base: "main", body, draft: true });
+  let pr = null;
+  try {
+    pr = existing[0]
+      ? await gh("PATCH", `/repos/${repo}/pulls/${existing[0].number}`, { body })
+      : await gh("POST", `/repos/${repo}/pulls`, { title: `Forge: ${issue.title}`, head: branch, base: "main", body, draft: true });
+  } catch (e) {
+    if (!/\b403\b/.test(String(e.message))) throw e;
+    log("Actions may not open PRs in this org: reporting on the issue instead");
+  }
+  const target = pr ? pr.number : issueNumber;
+  const openLink = `https://github.com/${repo}/compare/main...${branch}?expand=1&title=${encodeURIComponent(`Forge: ${issue.title}`)}`;
+  if (!pr) await gh("POST", `/repos/${repo}/issues/${issueNumber}/comments`, { body: `${body}\n\n**[Open the pull request](${openLink})** (branch \`${branch}\`). Mark it ready when you have reviewed it.` });
 
   // The review desk: the Crucible's model reviews the diff.
   let review = null;
@@ -244,11 +257,11 @@ async function main() {
        ...(Array.isArray(review.findings) ? review.findings.map((f, i) => `${i + 1}. \`${f.file}\`: ${f.issue}\n   Fix: ${f.fix}`) : [])].join("\n")
     : "Review desk: no usable review this run. A maintainer reviews as usual.";
   const totals = usage.map((u) => `${u.model}: ${u.input} in / ${u.output} out, $${u.cost.toFixed(4)}`).join("; ");
-  await gh("POST", `/repos/${repo}/issues/${pr.number}/comments`, { body: `${reviewBody}\n\n<sub>Run cost: $${cost().toFixed(4)} (${totals}).</sub>` });
-  await gh("POST", `/repos/${repo}/issues/${issueNumber}/comments`, { body: `ForgeAI opened #${pr.number} (tests ${test.ok ? "pass" : "fail"}, ${rounds} round(s), $${cost().toFixed(4)}).` });
+  await gh("POST", `/repos/${repo}/issues/${target}/comments`, { body: `${reviewBody}\n\n<sub>Run cost: $${cost().toFixed(4)} (${totals}).</sub>` });
+  if (pr) await gh("POST", `/repos/${repo}/issues/${issueNumber}/comments`, { body: `ForgeAI opened #${pr.number} (tests ${test.ok ? "pass" : "fail"}, ${rounds} round(s), $${cost().toFixed(4)}).` });
 
-  summary(`### Forge #${issueNumber} -> PR #${pr.number}\n- tests: ${test.ok ? "pass" : "fail"} (${rounds} rounds)\n- cost: $${cost().toFixed(4)}\n- ${totals}`);
-  log(`done: PR #${pr.number}, $${cost().toFixed(4)}`);
+  summary(`### Forge #${issueNumber} -> ${pr ? `PR #${pr.number}` : `branch ${branch} (reported on the issue)`}\n- tests: ${test.ok ? "pass" : "fail"} (${rounds} rounds)\n- cost: $${cost().toFixed(4)}\n- ${totals}`);
+  log(`done: ${pr ? `PR #${pr.number}` : `branch ${branch}`}, $${cost().toFixed(4)}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
