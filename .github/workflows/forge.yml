@@ -1,0 +1,51 @@
+name: forge
+
+# ForgeAI builds a spec into a draft pull request (README.md, forge/run.mjs).
+# Starts when a maintainer adds the `spec` label to an issue, or by hand.
+# AWS access is short-lived OIDC into one role that can only invoke the two
+# Bedrock models below; no long-lived cloud key is stored in this repo.
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Spec issue number
+        required: true
+
+concurrency:
+  group: forge-${{ github.event.issue.number || inputs.issue }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'spec'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false   # generated code runs here; keep the token off disk
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_FORGE_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: ForgeAI
+        run: node forge/run.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue }}
+          SENDER: ${{ github.actor }}
