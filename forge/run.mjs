@@ -121,10 +121,10 @@ export function testNames(project) {
 function runTests(project) {
   const home = mkdtempSync(join(tmpdir(), "forge-home-"));
   const r = spawnSync("npm", ["test", "--prefix", project], {
-    env: { PATH: process.env.PATH, HOME: home, CI: "true" },   // no AWS_*, no GITHUB_TOKEN, no ACTIONS_*
+    env: { PATH: process.env.PATH, HOME: home, CI: "true", NO_COLOR: "1", FORCE_COLOR: "0" },   // no AWS_*, no GITHUB_TOKEN, no ACTIONS_*
     encoding: "utf8", timeout: TEST_TIMEOUT_MS,
   });
-  const output = `${r.stdout ?? ""}\n${r.stderr ?? ""}`.trim();
+  const output = `${r.stdout ?? ""}\n${r.stderr ?? ""}`.replace(/\x1b\[[0-9;]*m/g, "").trim();
   return { ok: r.status === 0, output: output.slice(-6000), timedOut: r.error?.code === "ETIMEDOUT" };
 }
 
@@ -156,6 +156,7 @@ async function main() {
   log(`spec #${issueNumber} -> ${project}`);
 
   const messages = [{ role: "user", content: [{ text: `PROJECT: ${project}\n\nSPEC (issue #${issueNumber}: ${issue.title}):\n<<<SPEC\n${issue.body}\nSPEC>>>\n\nCURRENT FILES:\n${context(project) || "(new project: no files yet)"}` }] }];
+  const plans = [];
   let answer = null, test = { ok: false, output: "not run" }, rounds = 0, rejected = [], lost = [];
   const before = testNames(project);
 
@@ -168,6 +169,7 @@ async function main() {
       continue;
     }
     answer = a;
+    if (a.plan) plans.push(rounds === 1 ? a.plan : `Round ${rounds}: ${a.plan}`);
     rejected = a.files.filter((f) => !allowedPath(f.path, project)).map((f) => String(f.path));
     for (const f of a.files) {
       if (!allowedPath(f.path, project) || typeof f.content !== "string") continue;
@@ -213,7 +215,7 @@ async function main() {
   const body = [
     `Built by **ForgeAI** (${BUILDER.label}) from spec #${issueNumber}. Closes #${issueNumber}.`,
     "",
-    "### Plan", answer.plan || "(none given)",
+    "### Plan", plans.join("\n\n") || "(none given)",
     "",
     `### Tests: ${test.ok ? "pass" : "**FAIL**"} after ${rounds} round(s)`,
     "```", test.output.slice(-3000), "```",
@@ -221,7 +223,7 @@ async function main() {
     lost.length ? `\n### **Existing tests removed**\nThese tests existed before this run and are gone. Do not merge until they are restored:\n${lost.map((n) => `- \`${n}\``).join("\n")}` : "",
     rejected.length ? `\n### Paths refused\nThe model tried to write outside \`${project}\` or to protected files; these were NOT written: ${rejected.map((p) => `\`${p}\``).join(", ")}` : "",
     "",
-    `<sub>Draft until a person marks it ready. Model cost so far: $${cost().toFixed(4)}.</sub>`,
+    `<sub>Build cost: $${cost().toFixed(4)}. A person reviews and decides whether it merges.</sub>`,
   ].join("\n");
 
   // The PAID-LLC org does not let Actions open (or approve) pull requests, on
@@ -240,7 +242,7 @@ async function main() {
   }
   const target = pr ? pr.number : issueNumber;
   const openLink = `https://github.com/${repo}/compare/main...${branch}?expand=1&title=${encodeURIComponent(`Forge: ${issue.title}`)}`;
-  if (!pr) await gh("POST", `/repos/${repo}/issues/${issueNumber}/comments`, { body: `${body}\n\n**[Open the pull request](${openLink})** (branch \`${branch}\`). Mark it ready when you have reviewed it.` });
+  if (!pr) await gh("POST", `/repos/${repo}/issues/${issueNumber}/comments`, { body: `${body}\n\n**[Open the pull request](${openLink})** (branch \`${branch}\`).` });
 
   // The review desk: the Crucible's model reviews the diff.
   let review = null;
